@@ -51,3 +51,7 @@ Newer Apple runtimes check isolation and enter the actor directly from native
 callbacks. Older supported runtimes use actor tasks. Older-device behavior and
 live Sunshine/Apollo streaming still need device tests. Unit, loopback, C-host,
 and build results do not establish complete app CPU or energy use.
+
+## CI runtime checks
+
+Debug and release checks run on macOS 26. The macOS 26 GitHub runner built the ThreadSanitizer test binary, but its test process made no progress before test output. The cause is not yet confirmed. ThreadSanitizer runs separately on macOS 15; the full local macOS 26 suite also passes under ThreadSanitizer. Both CI jobs have a ten-minute limit. This keeps sanitizer coverage while the hosted macOS 26 startup issue is unresolved.
