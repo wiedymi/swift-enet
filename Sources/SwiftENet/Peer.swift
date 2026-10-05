@@ -2,9 +2,8 @@ import Foundation
 
 /// A deterministic, single-peer client. Time is monotonic milliseconds supplied
 /// by the caller. Sockets and application encryption are outside this type.
-struct ENetPeer {
-    enum State: Equatable { case connecting, connected, closed(ENetError?) }
-    typealias Delivery = ENetDelivery
+struct Peer {
+    enum State: Equatable { case connecting, connected, closed(ClientError?) }
     static let maximumMessageSize = 1_048_576
     static let maximumQueuedBytes = 4_194_304
     static let timeout: UInt64 = 10_000
@@ -12,7 +11,7 @@ struct ENetPeer {
 
     struct Output {
         var datagrams: [Data] = []
-        var packets: [ENetPacket] = []
+        var packets: [Packet] = []
     }
     private struct Outgoing {
         // Retain one immutable encoding, including encrypted payload bytes.
@@ -22,7 +21,7 @@ struct ENetPeer {
         var lastSent: UInt64?
         var attempts = 0
         var retryDelay: UInt64 = 0
-        init(command: ENetCommand) { bytes = command.encoded() }
+        init(command: Command) { bytes = command.encoded() }
         var channel: UInt8 { bytes[1] }
         var sequence: UInt16 { UInt16(bytes[2]) << 8 | UInt16(bytes[3]) }
         var number: UInt8 { bytes[0] & 15 }
@@ -52,7 +51,7 @@ struct ENetPeer {
         var count: Int
         var started: UInt64
         var pieces: [UInt32: Range<Int>] = [:]
-        mutating func insert(_ fragment: ENetFragment) -> Bool {
+        mutating func insert(_ fragment: Fragment) -> Bool {
             let offset = Int(fragment.offset), end = offset + fragment.payload.count
             let range = offset..<end
             guard !pieces.values.contains(where: { range.overlaps($0) }) else { return false }
@@ -96,7 +95,7 @@ struct ENetPeer {
     private var channels: [Channel]
     private var managementSequence: UInt16 = 1
     private var outgoing: [Outgoing] = []
-    private var acknowledgements: [ENetCommand] = []
+    private var acknowledgements: [Command] = []
     private var lastSend: UInt64
     private var lastCommunication: UInt64
     private var lossEpoch: UInt64
@@ -125,12 +124,12 @@ struct ENetPeer {
         self.connectID = connectID
         self.channels = Array(repeating: Channel(), count: channels)
         started = now; lastSend = now; lastCommunication = now; lossEpoch = now; throttleEpoch = now; bandwidthEpoch = now
-        let parameters = ENetConnectParameters(channels: UInt32(channels), connectID: connectID)
-        let command = ENetCommand(sequence: 1, body: .connect(parameters, data: connectData))
+        let parameters = ConnectParameters(channels: UInt32(channels), connectID: connectID)
+        let command = Command(sequence: 1, body: .connect(parameters, data: connectData))
         outgoing = [.init(command: command)]
     }
 
-    var metrics: ENetMetrics {
+    var metrics: Metrics {
         guard state == .connected else { return .init(isConnected: false) }
         return .init(isConnected: true, roundTripTimeMs: roundTripTime, roundTripTimeVarianceMs: roundTripVariance,
                      packetLossRatio: loss, packetLossVarianceRatio: lossVariance)
@@ -149,26 +148,26 @@ struct ENetPeer {
     }
 
     mutating func enqueue(_ data: Data, channel: UInt8, delivery: Delivery) throws {
-        guard state == .connected else { throw ENetError.notConnected }
-        guard data.count <= Self.maximumMessageSize else { throw ENetError.messageTooLarge }
+        guard state == .connected else { throw ClientError.notConnected }
+        guard data.count <= Self.maximumMessageSize else { throw ClientError.messageTooLarge }
         let channel = Int(channel) < channelCount ? channel : 0
         let index = Int(channel)
         let fragmentCapacity = mtu - 28
         let count = max(1, (data.count + fragmentCapacity - 1) / fragmentCapacity)
         guard count <= 4096, outgoing.count + count <= 8192, queuedBytes <= Self.maximumQueuedBytes - data.count - count * 24 else {
-            throw ENetError.queueFull
+            throw ClientError.queueFull
         }
         // Never allocate sequences so far ahead that an old ACK can name a new command.
         if let oldest = outgoing.first(where: { $0.channel == channel && $0.requestsAcknowledgement }) {
             let distance = channels[index].outgoingReliable &- oldest.sequence
-            guard Int(distance) + count < Int(Self.sequenceWindow) else { throw ENetError.queueFull }
+            guard Int(distance) + count < Int(Self.sequenceWindow) else { throw ClientError.queueFull }
         }
         if count > 1 {
             let start = channels[index].outgoingReliable &+ 1
             for number in 0..<count {
                 let offset = number * fragmentCapacity
                 let payload = data.subdata(in: (data.startIndex + offset)..<(data.startIndex + min(data.count, offset + fragmentCapacity)))
-                let fragment = ENetFragment(start: start, count: UInt32(count), number: UInt32(number),
+                let fragment = Fragment(start: start, count: UInt32(count), number: UInt32(number),
                                             total: UInt32(data.count), offset: UInt32(offset), payload: payload)
                 channels[index].outgoingReliable &+= 1
                 append(.init(channel: channel, sequence: channels[index].outgoingReliable, body: .fragment(fragment)))
@@ -185,7 +184,7 @@ struct ENetPeer {
         }
     }
 
-    private mutating func append(_ command: ENetCommand) {
+    private mutating func append(_ command: Command) {
         outgoing.append(.init(command: command))
     }
 
@@ -196,7 +195,7 @@ struct ENetPeer {
 
     private mutating func receiveActive(_ data: Data, now: UInt64, flushACKs: Bool) -> Output {
         // Parse the entire datagram before applying any command.
-        guard let datagram = try? ENetDatagram.decode(data), datagram.peerID == 0,
+        guard let datagram = try? Datagram.decode(data), datagram.peerID == 0,
               incomingSession == 255 || datagram.sessionID == incomingSession else { return Output() }
         var output = Output()
         for command in datagram.commands {
@@ -300,7 +299,7 @@ struct ENetPeer {
 
     private func sequenceDistance(_ sequence: UInt16, from base: UInt16) -> UInt16 { sequence &- base }
 
-    private mutating func acceptPayload(_ command: ENetCommand, now: UInt64, packets: inout [ENetPacket]) -> Bool {
+    private mutating func acceptPayload(_ command: Command, now: UInt64, packets: inout [Packet]) -> Bool {
         let index = Int(command.channel)
         let distance = sequenceDistance(command.sequence, from: channels[index].incomingReliable)
         switch command.body {
@@ -366,7 +365,7 @@ struct ENetPeer {
     }
 
     private mutating func acceptUnreliable(_ payload: Data, dependency: UInt16, sequence: UInt16,
-                                         channel: Int, packets: inout [ENetPacket]) -> Bool {
+                                         channel: Int, packets: inout [Packet]) -> Bool {
         let distance = dependency &- channels[channel].incomingReliable
         guard distance < Self.sequenceWindow else { return false }
         if distance == 0 {
@@ -380,8 +379,8 @@ struct ENetPeer {
         return true
     }
 
-    private mutating func acceptFragment(_ fragment: ENetFragment, reliable: Bool, dependency: UInt16,
-                                       channel: Int, now: UInt64, packets: inout [ENetPacket]) -> Bool {
+    private mutating func acceptFragment(_ fragment: Fragment, reliable: Bool, dependency: UInt16,
+                                       channel: Int, now: UInt64, packets: inout [Packet]) -> Bool {
         guard (1...4096).contains(fragment.count), fragment.number < fragment.count,
               fragment.total > 0, fragment.total <= Self.maximumMessageSize,
               fragment.count <= fragment.total, !fragment.payload.isEmpty,
@@ -424,7 +423,7 @@ struct ENetPeer {
         return acceptUnreliable(payload, dependency: dependency, sequence: fragment.start, channel: channel, packets: &packets)
     }
 
-    private mutating func dispatch(channel: Int, packets: inout [ENetPacket]) {
+    private mutating func dispatch(channel: Int, packets: inout [Packet]) {
         while let message = channels[channel].reliable.removeValue(forKey: channels[channel].incomingReliable &+ 1) {
             channels[channel].incomingReliable &+= message.sequences
             channels[channel].incomingUnreliable = 0
@@ -477,7 +476,7 @@ struct ENetPeer {
         let flightLimit = max(mtu, window * throttle / 32)
         var blockedChannels: Set<UInt8> = []
         func makeDatagram(_ commands: [Data], peer: UInt16, session: UInt8) -> Data {
-            var bytes = ENetDatagram(peerID: peer, sessionID: session, sentTime: UInt16(truncatingIfNeeded: now), commands: []).encoded()
+            var bytes = Datagram(peerID: peer, sessionID: session, sentTime: UInt16(truncatingIfNeeded: now), commands: []).encoded()
             for command in commands { bytes.append(command) }
             return bytes
         }
@@ -529,7 +528,7 @@ struct ENetPeer {
         var index = 0
         while index < acknowledgements.count {
             let end = min(acknowledgements.count, index + count)
-            datagrams.append(ENetDatagram(peerID: remotePeerID, sessionID: outgoingSession, sentTime: nil,
+            datagrams.append(Datagram(peerID: remotePeerID, sessionID: outgoingSession, sentTime: nil,
                                           commands: Array(acknowledgements[index..<end])).encoded())
             index = end
         }
@@ -552,13 +551,13 @@ struct ENetPeer {
     mutating func close(now: UInt64) -> Output {
         guard state == .connecting || state == .connected else { return Output() }
         managementSequence &+= 1
-        let command = ENetCommand(sequence: managementSequence, body: .disconnect(0), requestsAcknowledgement: false)
-        let datagram = ENetDatagram(peerID: remotePeerID, sessionID: outgoingSession, sentTime: nil, commands: [command]).encoded()
+        let command = Command(sequence: managementSequence, body: .disconnect(0), requestsAcknowledgement: false)
+        let datagram = Datagram(peerID: remotePeerID, sessionID: outgoingSession, sentTime: nil, commands: [command]).encoded()
         fail(nil)
         return Output(datagrams: [datagram])
     }
 
-    private mutating func fail(_ error: ENetError?) {
+    private mutating func fail(_ error: ClientError?) {
         state = .closed(error)
         outgoing.removeAll(); acknowledgements.removeAll(); channels.removeAll()
     }

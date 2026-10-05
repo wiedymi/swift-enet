@@ -23,7 +23,7 @@ Linux and Windows are not supported. The package uses Apple Dispatch and Darwin 
 ## Add the package
 
 ```swift
-.package(url: "https://github.com/wiedymi/swift-enet.git", from: "0.1.0")
+.package(url: "https://github.com/wiedymi/swift-enet.git", from: "0.2.0")
 ```
 
 Add `.product(name: "SwiftENet", package: "swift-enet")` to your target dependencies.
@@ -34,7 +34,7 @@ Add `.product(name: "SwiftENet", package: "swift-enet")` to your target dependen
 import Foundation
 import SwiftENet
 
-let client = try await ENetClient.connect(
+let client = try await Client.connect(
     host: "127.0.0.1", port: 47999, connectData: 0, channelCount: 4
 )
 try await client.send(Data([1, 2, 3]), channelID: 0, delivery: .reliable)
@@ -48,7 +48,7 @@ await client.close()
 `connect` completes the ENet handshake and supports cancellation. The host can
 negotiate fewer channels than requested; read `await client.channelCount`.
 `send` queues a message. It does not wait for an ACK. An out-of-range channel
-throws `ENetError.invalidChannel`. Received packets include their channel ID.
+throws `ClientError.invalidChannel`. Received packets include their channel ID.
 
 Only one task can wait for `receivePacket()` at a time. Cancelling that task
 cancels its read, not the connection. A clean close returns `nil`; a failed
@@ -57,6 +57,12 @@ protocol layer end the connection with its own error.
 
 Independent sessions have independent actors and sockets. A wrapper actor can
 share the client's public `unownedExecutor` to avoid an extra executor change.
+
+## Update from 0.1.0
+
+Version 0.2.0 removes redundant type prefixes. Use `Client`, `Packet`, `Delivery`,
+`Metrics`, and `ClientError` after `import SwiftENet`. Use `SwiftENet.Client` if
+another imported module has the same name. Method names and behavior are unchanged.
 
 ## Behavior and limits
 

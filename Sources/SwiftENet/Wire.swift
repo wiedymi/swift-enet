@@ -1,7 +1,7 @@
 import Foundation
 
 // ENet numeric fields are big endian. Application framing is separate.
-struct ENetConnectParameters: Equatable, Sendable {
+struct ConnectParameters: Equatable, Sendable {
     var peerID: UInt16 = 0
     var incomingSession: UInt8 = 255
     var outgoingSession: UInt8 = 255
@@ -16,7 +16,7 @@ struct ENetConnectParameters: Equatable, Sendable {
     var connectID: UInt32
 }
 
-struct ENetFragment: Equatable, Sendable {
+struct Fragment: Equatable, Sendable {
     var start: UInt16
     var count: UInt32
     var number: UInt32
@@ -25,19 +25,19 @@ struct ENetFragment: Equatable, Sendable {
     var payload: Data
 }
 
-enum ENetCommandBody: Equatable, Sendable {
+enum CommandBody: Equatable, Sendable {
     case acknowledge(sequence: UInt16, time: UInt16)
-    case connect(ENetConnectParameters, data: UInt32)
-    case verify(ENetConnectParameters)
+    case connect(ConnectParameters, data: UInt32)
+    case verify(ConnectParameters)
     case disconnect(UInt32)
     case ping
     case reliable(Data)
     case unreliable(sequence: UInt16, payload: Data)
-    case fragment(ENetFragment)
+    case fragment(Fragment)
     case unsequenced(group: UInt16, payload: Data)
     case bandwidth(incoming: UInt32, outgoing: UInt32)
     case throttle(interval: UInt32, increase: UInt32, decrease: UInt32)
-    case unreliableFragment(ENetFragment)
+    case unreliableFragment(Fragment)
 
     var number: UInt8 {
         switch self {
@@ -65,13 +65,13 @@ enum ENetCommandBody: Equatable, Sendable {
     }
 }
 
-struct ENetCommand: Equatable, Sendable {
+struct Command: Equatable, Sendable {
     var channel: UInt8
     var sequence: UInt16
-    var body: ENetCommandBody
+    var body: CommandBody
     var requestsAcknowledgement: Bool
 
-    init(channel: UInt8 = 255, sequence: UInt16 = 0, body: ENetCommandBody, requestsAcknowledgement: Bool? = nil) {
+    init(channel: UInt8 = 255, sequence: UInt16 = 0, body: CommandBody, requestsAcknowledgement: Bool? = nil) {
         self.channel = channel
         self.sequence = sequence
         self.body = body
@@ -96,13 +96,13 @@ struct ENetCommand: Equatable, Sendable {
     func encoded() -> Data {
         var bytes = Data(count: encodedSize)
         bytes.withUnsafeMutableBytes { buffer in
-            var writer = ENetWriter(bytes: buffer)
+            var writer = WireWriter(bytes: buffer)
             encode(into: &writer)
         }
         return bytes
     }
 
-    fileprivate func encode(into writer: inout ENetWriter) {
+    fileprivate func encode(into writer: inout WireWriter) {
         writer.u8(body.number | (requestsAcknowledgement ? 0x80 : 0) | (body.number == 9 || (body.number == 4 && !requestsAcknowledgement) ? 0x40 : 0))
         writer.u8(channel); writer.u16(sequence)
         switch body {
@@ -129,17 +129,17 @@ struct ENetCommand: Equatable, Sendable {
     }
 }
 
-struct ENetDatagram: Equatable, Sendable {
+struct Datagram: Equatable, Sendable {
     var peerID: UInt16
     var sessionID: UInt8
     var sentTime: UInt16?
-    var commands: [ENetCommand]
+    var commands: [Command]
 
     func encoded() -> Data {
         let size = (sentTime == nil ? 2 : 4) + commands.reduce(0) { $0 + $1.encodedSize }
         var bytes = Data(count: size)
         bytes.withUnsafeMutableBytes { buffer in
-            var writer = ENetWriter(bytes: buffer)
+            var writer = WireWriter(bytes: buffer)
             let session = peerID == 4095 ? UInt16(0) : UInt16(sessionID & 3) << 12
             writer.u16(peerID | session | (sentTime == nil ? 0 : 0x8000))
             if let sentTime { writer.u16(sentTime) }
@@ -149,20 +149,20 @@ struct ENetDatagram: Equatable, Sendable {
     }
 
     static func decode(_ bytes: Data) throws -> Self {
-        guard bytes.count <= 4096 else { throw ENetError.invalidPacket }
+        guard bytes.count <= 4096 else { throw ClientError.invalidPacket }
         return try bytes.withUnsafeBytes { buffer in
-            var reader = ENetReader(bytes: buffer)
+            var reader = WireReader(bytes: buffer)
             let header = try reader.u16()
-            guard header & 0x4000 == 0 else { throw ENetError.invalidPacket }
+            guard header & 0x4000 == 0 else { throw ClientError.invalidPacket }
             let time: UInt16? = header & 0x8000 != 0 ? try reader.u16() : nil
-            var commands: [ENetCommand] = []
+            var commands: [Command] = []
             while !reader.atEnd {
-                guard commands.count < 32 else { throw ENetError.invalidPacket }
+                guard commands.count < 32 else { throw ClientError.invalidPacket }
                 let flags = try reader.u8()
-                guard flags & 0x30 == 0 else { throw ENetError.invalidPacket }
+                guard flags & 0x30 == 0 else { throw ClientError.invalidPacket }
                 let channel = try reader.u8()
                 let sequence = try reader.u16()
-                let body: ENetCommandBody
+                let body: CommandBody
                 switch flags & 0x0F {
                 case 1: body = .acknowledge(sequence: try reader.u16(), time: try reader.u16())
                 case 2: body = .connect(try reader.parameters(), data: try reader.u32())
@@ -180,7 +180,7 @@ struct ENetDatagram: Equatable, Sendable {
                 case 10: body = .bandwidth(incoming: try reader.u32(), outgoing: try reader.u32())
                 case 11: body = .throttle(interval: try reader.u32(), increase: try reader.u32(), decrease: try reader.u32())
                 case 12: body = .unreliableFragment(try reader.fragment())
-                default: throw ENetError.invalidPacket
+                default: throw ClientError.invalidPacket
                 }
                 let acknowledged = flags & 0x80 != 0
                 let expectedFlags: UInt8
@@ -191,39 +191,39 @@ struct ENetDatagram: Equatable, Sendable {
                 default: expectedFlags = 0
                 }
                 guard flags & 0xC0 == expectedFlags, !acknowledged || time != nil else {
-                    throw ENetError.invalidPacket
+                    throw ClientError.invalidPacket
                 }
                 commands.append(.init(channel: channel, sequence: sequence, body: body, requestsAcknowledgement: acknowledged))
             }
-            guard !commands.isEmpty else { throw ENetError.invalidPacket }
+            guard !commands.isEmpty else { throw ClientError.invalidPacket }
             return .init(peerID: header & 0x0FFF, sessionID: UInt8((header >> 12) & 3), sentTime: time, commands: commands)
         }
     }
 }
 
-private struct ENetReader {
+private struct WireReader {
     let bytes: UnsafeRawBufferPointer
     var offset = 0
     var atEnd: Bool { offset == bytes.count }
     mutating func u8() throws -> UInt8 {
-        guard offset < bytes.count else { throw ENetError.invalidPacket }
+        guard offset < bytes.count else { throw ClientError.invalidPacket }
         defer { offset += 1 }
         return bytes[offset]
     }
     mutating func u16() throws -> UInt16 { (UInt16(try u8()) << 8) | UInt16(try u8()) }
     mutating func u32() throws -> UInt32 { (UInt32(try u16()) << 16) | UInt32(try u16()) }
     mutating func payload(length: Int) throws -> Data {
-        guard length >= 0, length <= bytes.count - offset else { throw ENetError.invalidPacket }
+        guard length >= 0, length <= bytes.count - offset else { throw ClientError.invalidPacket }
         defer { offset += length }
         return Data(bytes: bytes.baseAddress!.advanced(by: offset), count: length)
     }
-    mutating func parameters() throws -> ENetConnectParameters {
+    mutating func parameters() throws -> ConnectParameters {
         .init(peerID: try u16(), incomingSession: try u8(), outgoingSession: try u8(),
               mtu: try u32(), window: try u32(), channels: try u32(), incomingBandwidth: try u32(),
               outgoingBandwidth: try u32(), throttleInterval: try u32(), throttleIncrease: try u32(),
               throttleDecrease: try u32(), connectID: try u32())
     }
-    mutating func fragment() throws -> ENetFragment {
+    mutating func fragment() throws -> Fragment {
         let start = try u16(), length = try u16()
         let count = try u32(), number = try u32(), total = try u32(), offset = try u32()
         return .init(start: start, count: count, number: number, total: total, offset: offset,
@@ -233,7 +233,7 @@ private struct ENetReader {
 
 // Buffers exist only within Data's scoped byte access. Encoding allocates the
 // exact complete size once. Byte stores do not require integer alignment.
-private struct ENetWriter {
+private struct WireWriter {
     let bytes: UnsafeMutableRawBufferPointer
     var offset = 0
     mutating func u8(_ value: UInt8) { bytes[offset] = value; offset += 1 }
@@ -249,7 +249,7 @@ private struct ENetWriter {
         }
         offset += data.count
     }
-    mutating func parameters(_ value: ENetConnectParameters) {
+    mutating func parameters(_ value: ConnectParameters) {
         u16(value.peerID); u8(value.incomingSession); u8(value.outgoingSession)
         u32(value.mtu); u32(value.window); u32(value.channels)
         u32(value.incomingBandwidth); u32(value.outgoingBandwidth)

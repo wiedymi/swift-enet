@@ -1,6 +1,6 @@
 import Foundation
 
-public struct ENetMetrics: Equatable, Sendable, Codable {
+public struct Metrics: Equatable, Sendable, Codable {
     public var isConnected: Bool
     public var roundTripTimeMs: Int?
     public var roundTripTimeVarianceMs: Int?

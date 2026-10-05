@@ -4,9 +4,9 @@ import Foundation
 import Testing
 @testable import SwiftENet
 
-@Test func enetDatagramSocketCoalescedReadKeepsEveryPacket() async throws {
-    let server = try ENetTestListener(host: "127.0.0.1")
-    let socket = try ENetDatagramSocket(host: "127.0.0.1", port: server.port)
+@Test func datagramSocketCoalescedReadKeepsEveryPacket() async throws {
+    let server = try TestListener(host: "127.0.0.1")
+    let socket = try DatagramSocket(host: "127.0.0.1", port: server.port)
     defer { socket.close() }
     try socket.send(Data([0]))
     let address = try await server.receive().address
@@ -14,7 +14,7 @@ import Testing
         var iterator = socketEvents(socket).makeAsyncIterator()
         var packets: [Data] = []
         while packets.count < 32 {
-            guard let group = try await iterator.next() else { throw ENetError.closed }
+            guard let group = try await iterator.next() else { throw ClientError.closed }
             packets += group
         }
         return packets
@@ -28,9 +28,9 @@ import Testing
 }
 
 @Test(arguments: ["127.0.0.1", "::1"])
-func enetDatagramSocketReadinessAndLocalPort(host: String) async throws {
-    let server = try ENetTestListener(host: host)
-    let socket = try ENetDatagramSocket(host: host, port: server.port)
+func datagramSocketReadinessAndLocalPort(host: String) async throws {
+    let server = try TestListener(host: host)
+    let socket = try DatagramSocket(host: host, port: server.port)
     defer { socket.close() }
     #expect(socket.port > 0)
     try socket.send(Data([1, 2, 3]))
@@ -43,24 +43,24 @@ func enetDatagramSocketReadinessAndLocalPort(host: String) async throws {
     #expect(try await receiver.value == Data([4, 5, 6]))
 }
 
-@Test func enetDatagramSocketCloseAndCancelWakeReader() async throws {
-    let server = try ENetTestListener(host: "127.0.0.1")
-    let socket = try ENetDatagramSocket(host: "127.0.0.1", port: server.port)
+@Test func datagramSocketCloseAndCancelWakeReader() async throws {
+    let server = try TestListener(host: "127.0.0.1")
+    let socket = try DatagramSocket(host: "127.0.0.1", port: server.port)
     let receiver = Task { var iterator = socketEvents(socket).makeAsyncIterator(); return try await iterator.next()?.first }
     receiver.cancel()
     #expect(try await receiver.value == nil)
     socket.close(); socket.close()
-    #expect(throws: ENetError.closed) { try socket.send(Data([1])) }
-    let other = try ENetDatagramSocket(host: "127.0.0.1", port: server.port)
+    #expect(throws: ClientError.closed) { try socket.send(Data([1])) }
+    let other = try DatagramSocket(host: "127.0.0.1", port: server.port)
     let waiting = Task { var iterator = socketEvents(other).makeAsyncIterator(); return try await iterator.next()?.first }
     other.close()
     #expect(try await waiting.value == nil)
 }
 
-@Test func enetClientCancellationStopsConnectionSetup() async throws {
-    let server = try ENetTestListener(host: "127.0.0.1")
+@Test func clientCancellationStopsConnectionSetup() async throws {
+    let server = try TestListener(host: "127.0.0.1")
     let connecting = Task {
-        try await ENetClient.connect(host: "127.0.0.1", port: server.port, connectData: 1)
+        try await Client.connect(host: "127.0.0.1", port: server.port, connectData: 1)
     }
     _ = try await server.receive()
     connecting.cancel()
@@ -73,7 +73,7 @@ func enetDatagramSocketReadinessAndLocalPort(host: String) async throws {
 
 // Tests use a stream adapter; production callbacks enter the connection actor
 // directly on its serial queue on supported runtimes.
-private func socketEvents(_ socket: ENetDatagramSocket) -> AsyncThrowingStream<[Data], any Error> {
+private func socketEvents(_ socket: DatagramSocket) -> AsyncThrowingStream<[Data], any Error> {
     let pair = AsyncThrowingStream<[Data], any Error>.makeStream(bufferingPolicy: .bufferingOldest(256))
     socket.setReceiveHandler { [weak socket] event in
         if let socket { dispatchPrecondition(condition: .onQueue(socket.queue)) }
@@ -89,7 +89,7 @@ private func socketEvents(_ socket: ENetDatagramSocket) -> AsyncThrowingStream<[
 
 // Nonblocking test socket. Every receive has a finite deadline. The server is
 // retained by each task that uses it, so descriptor teardown cannot race I/O.
-private final class ENetTestListener: Sendable {
+private final class TestListener: Sendable {
     struct Packet: Sendable { let data: Data; let address: Data }
     let port: UInt16
     private let descriptor: Int32
@@ -97,17 +97,17 @@ private final class ENetTestListener: Sendable {
     init(host: String) throws {
         var hints = addrinfo(); hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_DGRAM; hints.ai_protocol = IPPROTO_UDP
         var result: UnsafeMutablePointer<addrinfo>?
-        guard getaddrinfo(host, "0", &hints, &result) == 0, let result else { throw ENetError.invalidConnect }
+        guard getaddrinfo(host, "0", &hints, &result) == 0, let result else { throw ClientError.invalidConnect }
         defer { freeaddrinfo(result) }
         let fd = Darwin.socket(result.pointee.ai_family, SOCK_DGRAM, IPPROTO_UDP)
-        guard fd >= 0 else { throw ENetError.invalidConnect }
+        guard fd >= 0 else { throw ClientError.invalidConnect }
         guard Darwin.bind(fd, result.pointee.ai_addr, result.pointee.ai_addrlen) == 0,
-              fcntl(fd, F_SETFL, O_NONBLOCK) == 0 else { Darwin.close(fd); throw ENetError.invalidConnect }
+              fcntl(fd, F_SETFL, O_NONBLOCK) == 0 else { Darwin.close(fd); throw ClientError.invalidConnect }
         var address = sockaddr_storage(); var length = socklen_t(MemoryLayout<sockaddr_storage>.size)
         let query = withUnsafeMutablePointer(to: &address) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) }
         }
-        guard query == 0 else { Darwin.close(fd); throw ENetError.invalidConnect }
+        guard query == 0 else { Darwin.close(fd); throw ClientError.invalidConnect }
         port = withUnsafePointer(to: address) {
             if Int32(address.ss_family) == AF_INET6 {
                 return $0.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { UInt16(bigEndian: $0.pointee.sin6_port) }
@@ -130,10 +130,10 @@ private final class ENetTestListener: Sendable {
                 let addressBytes = withUnsafeBytes(of: address) { Data($0.prefix(Int(length))) }
                 return Packet(data: Data(bytes.prefix(count)), address: addressBytes)
             }
-            guard errno == EAGAIN || errno == EWOULDBLOCK else { throw ENetError.invalidPacket }
+            guard errno == EAGAIN || errno == EWOULDBLOCK else { throw ClientError.invalidPacket }
             try await Task.sleep(for: .milliseconds(1))
         }
-        throw ENetError.timedOut
+        throw ClientError.timedOut
     }
     func send(_ packet: Data, to address: Data) throws {
         var storage = sockaddr_storage()
@@ -143,29 +143,29 @@ private final class ENetTestListener: Sendable {
                 $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { sendto(descriptor, bytes.baseAddress, bytes.count, 0, $0, socklen_t(address.count)) }
             }
         }
-        guard count == packet.count else { throw ENetError.invalidPacket }
+        guard count == packet.count else { throw ClientError.invalidPacket }
     }
 }
 
-@Test func enetHostnameKeepsIPv4Compatibility() async throws {
-    let server = try ENetTestListener(host: "127.0.0.1")
-    let socket = try ENetDatagramSocket(host: "localhost", port: server.port)
+@Test func hostnameKeepsIPv4Compatibility() async throws {
+    let server = try TestListener(host: "127.0.0.1")
+    let socket = try DatagramSocket(host: "localhost", port: server.port)
     defer { socket.close() }
     try socket.send(Data([1]))
     #expect(try await server.receive().data == Data([1]))
 }
 
-@Test func enetCancelledAddressLookupClosesLateSocket() async throws {
-    let server = try ENetTestListener(host: "127.0.0.1")
-    let opening = ENetSocketOpening()
+@Test func cancelledAddressLookupClosesLateSocket() async throws {
+    let server = try TestListener(host: "127.0.0.1")
+    let opening = SocketOpening()
     let gate = DispatchSemaphore(value: 0)
     let started = AsyncStream<Void>.makeStream()
-    let created = AsyncStream<ENetDatagramSocket>.makeStream()
+    let created = AsyncStream<DatagramSocket>.makeStream()
     let caller = Task {
         try await opening.start {
             started.continuation.yield(())
-            guard gate.wait(timeout: .now() + 2) == .success else { throw ENetError.timedOut }
-            let socket = try ENetDatagramSocket(host: "127.0.0.1", port: server.port)
+            guard gate.wait(timeout: .now() + 2) == .success else { throw ClientError.timedOut }
+            let socket = try DatagramSocket(host: "127.0.0.1", port: server.port)
             created.continuation.yield(socket)
             return socket
         }
@@ -182,7 +182,7 @@ private final class ENetTestListener: Sendable {
     var closed = false
     while ContinuousClock.now < deadline {
         do { try late.send(Data([1])) }
-        catch ENetError.closed { closed = true; break }
+        catch ClientError.closed { closed = true; break }
         try await Task.sleep(for: .milliseconds(1))
     }
     #expect(closed)
@@ -190,20 +190,20 @@ private final class ENetTestListener: Sendable {
     started.continuation.finish(); created.continuation.finish()
 }
 
-@Test func enetClientPreservesChannelsAndRetriesWithoutPolling() async throws {
-    let server = try ENetTestListener(host: "127.0.0.1")
+@Test func clientPreservesChannelsAndRetriesWithoutPolling() async throws {
+    let server = try TestListener(host: "127.0.0.1")
     let host = Task {
         let connect = try await server.receive()
-        let command = try #require(try ENetDatagram.decode(connect.data).commands.first)
-        guard case .connect(var parameters, _) = command.body else { throw ENetError.invalidConnect }
+        let command = try #require(try Datagram.decode(connect.data).commands.first)
+        guard case .connect(var parameters, _) = command.body else { throw ClientError.invalidConnect }
         parameters.peerID = 9; parameters.incomingSession = 1; parameters.outgoingSession = 2
-        try server.send(ENetDatagram(peerID: 0, sessionID: 1, sentTime: 0,
+        try server.send(Datagram(peerID: 0, sessionID: 1, sentTime: 0,
                                     commands: [.init(sequence: 1, body: .verify(parameters))]).encoded(), to: connect.address)
-        var first: ENetCommand?
+        var first: Command?
         var completed = false
         while !completed {
             let packet = try await server.receive()
-            let datagram = try ENetDatagram.decode(packet.data)
+            let datagram = try Datagram.decode(packet.data)
             for command in datagram.commands {
                 if case .reliable = command.body {
                     if let first {
@@ -211,7 +211,7 @@ private final class ENetTestListener: Sendable {
                         completed = true
                     } else { first = command; continue }
                     let time = try #require(datagram.sentTime)
-                    try server.send(ENetDatagram(peerID: 0, sessionID: 1, sentTime: 1, commands: [
+                    try server.send(Datagram(peerID: 0, sessionID: 1, sentTime: 1, commands: [
                         .init(channel: command.channel, body: .acknowledge(sequence: command.sequence, time: time)),
                         .init(channel: 3, sequence: 1, body: .reliable(Data([9, 8, 7])))
                     ]).encoded(), to: packet.address)
@@ -219,14 +219,14 @@ private final class ENetTestListener: Sendable {
             }
         }
     }
-    let client = try await ENetClient.connect(host: "127.0.0.1", port: server.port, channelCount: 4)
+    let client = try await Client.connect(host: "127.0.0.1", port: server.port, channelCount: 4)
     #expect(client.localPort > 0)
     #expect(await client.channelCount == 4)
     do { try await client.send(Data([1]), channelID: 4); Issue.record("Invalid channel accepted") }
-    catch { #expect(error as? ENetError == .invalidChannel) }
+    catch { #expect(error as? ClientError == .invalidChannel) }
     try await client.send(Data([1, 2, 3]), channelID: 3)
     try await host.value
-    #expect(try await client.receivePacket() == ENetPacket(data: Data([9, 8, 7]), channelID: 3))
+    #expect(try await client.receivePacket() == Packet(data: Data([9, 8, 7]), channelID: 3))
     #expect(await client.snapshotMetrics().isConnected)
     let waiting = Task { try await client.receivePacket() }
     try await Task.sleep(for: .milliseconds(1))
@@ -238,38 +238,38 @@ private final class ENetTestListener: Sendable {
     #expect(!(await client.snapshotMetrics().isConnected))
 }
 
-@Test(arguments: [0, 256, Int.max]) func enetClientRejectsInvalidChannelCount(_ count: Int) async {
-    do { _ = try await ENetClient.connect(host: "127.0.0.1", port: 1, channelCount: count); Issue.record("Invalid channel count accepted") }
-    catch { #expect(error as? ENetError == .invalidConnect) }
+@Test(arguments: [0, 256, Int.max]) func clientRejectsInvalidChannelCount(_ count: Int) async {
+    do { _ = try await Client.connect(host: "127.0.0.1", port: 1, channelCount: count); Issue.record("Invalid channel count accepted") }
+    catch { #expect(error as? ClientError == .invalidConnect) }
 }
 
-@Test func enetClientConcurrentChannelsAndReaderKeepEveryPacket() async throws {
-    let server = try ENetTestListener(host: "127.0.0.1")
+@Test func clientConcurrentChannelsAndReaderKeepEveryPacket() async throws {
+    let server = try TestListener(host: "127.0.0.1")
     let host = Task {
         let connect = try await server.receive()
-        let command = try #require(try ENetDatagram.decode(connect.data).commands.first)
-        guard case .connect(var parameters, _) = command.body else { throw ENetError.invalidConnect }
+        let command = try #require(try Datagram.decode(connect.data).commands.first)
+        guard case .connect(var parameters, _) = command.body else { throw ClientError.invalidConnect }
         parameters.peerID = 9; parameters.incomingSession = 1; parameters.outgoingSession = 2
-        try server.send(ENetDatagram(peerID: 0, sessionID: 1, sentTime: 0,
+        try server.send(Datagram(peerID: 0, sessionID: 1, sentTime: 0,
                                     commands: [.init(sequence: 1, body: .verify(parameters))]).encoded(), to: connect.address)
         var seen: Set<Data> = []
         var sequences: [UInt8: UInt16] = [:]
         while seen.count < 40 {
             let incoming = try await server.receive()
-            let datagram = try ENetDatagram.decode(incoming.data)
+            let datagram = try Datagram.decode(incoming.data)
             for command in datagram.commands {
                 guard case .reliable(let payload) = command.body else { continue }
                 let time = try #require(datagram.sentTime)
-                var reply = [ENetCommand(channel: command.channel, body: .acknowledge(sequence: command.sequence, time: time))]
+                var reply = [Command(channel: command.channel, body: .acknowledge(sequence: command.sequence, time: time))]
                 if seen.insert(payload).inserted {
                     sequences[command.channel, default: 0] += 1
                     reply.append(.init(channel: command.channel, sequence: sequences[command.channel]!, body: .reliable(payload)))
                 }
-                try server.send(ENetDatagram(peerID: 0, sessionID: 1, sentTime: time, commands: reply).encoded(), to: incoming.address)
+                try server.send(Datagram(peerID: 0, sessionID: 1, sentTime: time, commands: reply).encoded(), to: incoming.address)
             }
         }
     }
-    let client = try await ENetClient.connect(host: "127.0.0.1", port: server.port, channelCount: 2)
+    let client = try await Client.connect(host: "127.0.0.1", port: server.port, channelCount: 2)
     let deadline = Task { do { try await Task.sleep(for: .seconds(3)); await client.close() } catch {} }
     defer { deadline.cancel(); host.cancel() }
     func send(_ channel: UInt8) async throws {
@@ -286,10 +286,10 @@ private final class ENetTestListener: Sendable {
     try await first; try await second; try await host.value
     #expect(received.count == 40)
     let waiting = Task { try await client.receivePacket() }
-    await client.close(throwing: ENetError.queueFull)
+    await client.close(throwing: ClientError.queueFull)
     do { _ = try await waiting.value; Issue.record("Failed close returned normally") }
-    catch { #expect(error as? ENetError == .queueFull) }
+    catch { #expect(error as? ClientError == .queueFull) }
     await client.close()
     do { _ = try await client.receivePacket(); Issue.record("Repeated close removed the failure") }
-    catch { #expect(error as? ENetError == .queueFull) }
+    catch { #expect(error as? ClientError == .queueFull) }
 }

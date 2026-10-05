@@ -2,7 +2,7 @@ import Dispatch
 
 /// Native callbacks and Swift jobs enter through the same serial queue.
 /// Explicit queue submission also makes their ordering visible to race checks.
-final class ENetExecutor: SerialExecutor {
+final class SocketExecutor: SerialExecutor {
     let queue = DispatchSerialQueue(label: "swift-enet.udp")
 
     func enqueue(_ job: consuming ExecutorJob) {

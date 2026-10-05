@@ -1,4 +1,4 @@
-public enum ENetError: Error, Equatable, Sendable {
+public enum ClientError: Error, Equatable, Sendable {
     case invalidPacket
     case invalidConnect
     case notConnected

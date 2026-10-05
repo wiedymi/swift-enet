@@ -55,3 +55,13 @@ and build results do not establish complete app CPU or energy use.
 ## CI runtime checks
 
 Debug and release checks run on macOS 26. The macOS 26 GitHub runner built the ThreadSanitizer test binary, but its test process made no progress before test output. The cause is not yet confirmed. ThreadSanitizer runs separately on macOS 15; the full local macOS 26 suite also passes under ThreadSanitizer. Both CI jobs have a ten-minute limit. This keeps sanitizer coverage while the hosted macOS 26 startup issue is unresolved.
+
+## Type names in 0.2.0
+
+The module supplies the ENet context. Public types are `Client`, `Packet`,
+`Delivery`, `Metrics`, and `ClientError`. Internal types and file names also omit
+the ENet prefix. `SocketExecutor`, `WireReader`, and `WireWriter` retain their
+roles in their names. The redundant peer delivery alias is removed. This is a
+source API change; callers must update names. Methods, state, bounds, wire bytes,
+and scheduling are unchanged. The existing 32 tests pass in debug, release, and
+ThreadSanitizer with complete strict concurrency checks.

@@ -6,9 +6,9 @@ import os
 /// All mutable data is inside a Sendable lock. Descriptor operations and
 /// cancellation use that lock; only the source's cancel handler closes it.
 /// Callbacks run on queue after unlocking. The actors share this executor.
-final class ENetDatagramSocket: Sendable {
+final class DatagramSocket: Sendable {
     enum Event: Sendable { case ready, closed, failed(any Error) }
-    let executor = ENetExecutor()
+    let executor = SocketExecutor()
     var queue: DispatchSerialQueue { executor.queue }
     let port: UInt16
     var isClosed: Bool { source.isCancelled }
@@ -21,10 +21,10 @@ final class ENetDatagramSocket: Sendable {
     }
     private let buffers = OSAllocatedUnfairLock(initialState: Buffers())
 
-    static func open(host: String, port: UInt16) async throws -> ENetDatagramSocket {
-        let opening = ENetSocketOpening()
+    static func open(host: String, port: UInt16) async throws -> DatagramSocket {
+        let opening = SocketOpening()
         let socket = try await withTaskCancellationHandler {
-            try await opening.start { try ENetDatagramSocket(host: host, port: port) }
+            try await opening.start { try DatagramSocket(host: host, port: port) }
         } onCancel: {
             Task { await opening.cancel() }
         }
@@ -39,7 +39,7 @@ final class ENetDatagramSocket: Sendable {
         hints.ai_protocol = IPPROTO_UDP
         var addresses: UnsafeMutablePointer<addrinfo>?
         let result = getaddrinfo(host, String(port), &hints, &addresses)
-        guard result == 0, let addresses else { throw ENetError.invalidConnect }
+        guard result == 0, let addresses else { throw ClientError.invalidConnect }
         defer { freeaddrinfo(addresses) }
         var candidate: UnsafeMutablePointer<addrinfo>? = addresses
         var candidates: [UnsafeMutablePointer<addrinfo>] = []
@@ -61,13 +61,13 @@ final class ENetDatagramSocket: Sendable {
                 Darwin.close(fd)
             }
         }
-        guard selected >= 0 else { throw ENetError.invalidConnect }
+        guard selected >= 0 else { throw ClientError.invalidConnect }
         var local = sockaddr_storage()
         var length = socklen_t(MemoryLayout<sockaddr_storage>.size)
         let query = withUnsafeMutablePointer(to: &local) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(selected, $0, &length) }
         }
-        guard query == 0 else { Darwin.close(selected); throw ENetError.invalidConnect }
+        guard query == 0 else { Darwin.close(selected); throw ClientError.invalidConnect }
         let localPort = withUnsafePointer(to: local) { pointer -> UInt16 in
             if Int32(local.ss_family) == AF_INET6 {
                 return pointer.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { UInt16(bigEndian: $0.pointee.sin6_port) }
@@ -88,11 +88,11 @@ final class ENetDatagramSocket: Sendable {
 
     func send(_ packet: Data) throws {
         try buffers.withLock { _ in
-            guard !source.isCancelled else { throw ENetError.closed }
+            guard !source.isCancelled else { throw ClientError.closed }
             let count = packet.withUnsafeBytes { Darwin.send(descriptor, $0.baseAddress, $0.count, 0) }
             if count == packet.count { return }
             if count < 0 && Self.isTransient(errno) { return }
-            throw ENetError.socketFailure(code: errno)
+            throw ClientError.socketFailure(code: errno)
         }
     }
 
@@ -145,7 +145,7 @@ final class ENetDatagramSocket: Sendable {
                 }
                 if errno == EINTR { continue }
                 if Self.isTransient(errno) { break }
-                event = .failed(ENetError.socketFailure(code: errno))
+                event = .failed(ClientError.socketFailure(code: errno))
                 break
             }
             return (value.handler, event)
@@ -160,21 +160,21 @@ final class ENetDatagramSocket: Sendable {
 
 /// Address lookup itself is a system call. Cancellation releases the caller
 /// immediately; a late worker result closes its descriptor instead of escaping.
-actor ENetSocketOpening {
+actor SocketOpening {
     private enum State {
         case idle
-        case waiting(CheckedContinuation<ENetDatagramSocket, any Error>)
+        case waiting(CheckedContinuation<DatagramSocket, any Error>)
         case cancelled
         case finished
     }
     private var state: State = .idle
 
-    func start(create: @escaping @Sendable () throws -> ENetDatagramSocket) async throws -> ENetDatagramSocket {
+    func start(create: @escaping @Sendable () throws -> DatagramSocket) async throws -> DatagramSocket {
         try Task.checkCancellation()
         return try await withCheckedThrowingContinuation { continuation in
             switch state {
             case .cancelled: continuation.resume(throwing: CancellationError())
-            case .finished, .waiting: continuation.resume(throwing: ENetError.closed)
+            case .finished, .waiting: continuation.resume(throwing: ClientError.closed)
             case .idle:
                 state = .waiting(continuation)
                 Task.detached { await self.finish(Result { try create() }) }
@@ -192,7 +192,7 @@ actor ENetSocketOpening {
         }
     }
 
-    private func finish(_ result: Result<ENetDatagramSocket, any Error>) {
+    private func finish(_ result: Result<DatagramSocket, any Error>) {
         switch state {
         case .waiting(let continuation):
             state = .finished
