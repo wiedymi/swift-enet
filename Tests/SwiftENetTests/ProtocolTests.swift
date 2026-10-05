@@ -2,6 +2,8 @@ import Foundation
 import Testing
 @testable import SwiftENet
 
+@Suite(.serialized) struct TransportTests: Sendable {
+
 @Test func codecReadsDataSlicesAndEmptyPayloads() throws {
     let datagram = Datagram(peerID: 0, sessionID: 2, sentTime: 123,
         commands: [.init(channel: 0, sequence: 1, body: .reliable(Data())),
@@ -320,19 +322,6 @@ private func inbound(_ commands: [Command], time: UInt16 = 1, session: UInt8 = 1
     #expect(peer.receive(inbound([next]), now: 1).packets.map(\.data) == [Data([3])])
 }
 
-private extension Data {
-    init?(hexString: String) {
-        guard hexString.count % 2 == 0 else { return nil }
-        var bytes: [UInt8] = []
-        var index = hexString.startIndex
-        while index < hexString.endIndex {
-            let next = hexString.index(index, offsetBy: 2)
-            guard let byte = UInt8(hexString[index..<next], radix: 16) else { return nil }
-            bytes.append(byte); index = next
-        }
-        self.init(bytes)
-    }
-}
 
 @Test func conflictingReliableRangesAreRejectedWithoutLosingValidData() {
     var peer = readyPeer()
@@ -414,4 +403,20 @@ private extension Data {
     let metrics = try JSONDecoder().decode(Metrics.self, from: Data("{\"isConnected\":true}".utf8))
     #expect(metrics.queuedSendBytes == nil)
     #expect(metrics.discardedSocketDatagrams == nil)
+}
+
+}
+
+private extension Data {
+    init?(hexString: String) {
+        guard hexString.count % 2 == 0 else { return nil }
+        var bytes: [UInt8] = []
+        var index = hexString.startIndex
+        while index < hexString.endIndex {
+            let next = hexString.index(index, offsetBy: 2)
+            guard let byte = UInt8(hexString[index..<next], radix: 16) else { return nil }
+            bytes.append(byte); index = next
+        }
+        self.init(bytes)
+    }
 }

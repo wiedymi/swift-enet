@@ -4,6 +4,8 @@ import Foundation
 import Testing
 @testable import SwiftENet
 
+extension TransportTests {
+
 @Test func datagramSocketCoalescedReadKeepsEveryPacket() async throws {
     let server = try TestListener(host: "127.0.0.1")
     let socket = try DatagramSocket(host: "127.0.0.1", port: server.port)
@@ -313,4 +315,6 @@ private final class TestListener: Sendable {
     try server.send(Data([9]), to: address)
     #expect(try await reader.value == [Data([9])])
     #expect(socket.discardedDatagrams == 1)
+}
+
 }
