@@ -118,7 +118,8 @@ private final class TestListener: Sendable {
     }
     deinit { Darwin.close(descriptor) }
     func receive() async throws -> Packet {
-        let deadline = ContinuousClock.now + .seconds(3)
+        // Allow the protocol setup deadline on slow sanitizer runners.
+        let deadline = ContinuousClock.now + .milliseconds(Int64(Peer.timeout))
         while ContinuousClock.now < deadline {
             try Task.checkCancellation()
             var bytes = [UInt8](repeating: 0, count: 65535)
