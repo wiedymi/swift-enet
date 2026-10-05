@@ -293,3 +293,23 @@ private final class TestListener: Sendable {
     do { _ = try await client.receivePacket(); Issue.record("Repeated close removed the failure") }
     catch { #expect(error as? ClientError == .queueFull) }
 }
+
+@Test func oversizedSocketDatagramIsCountedAndNotDelivered() async throws {
+    let server = try TestListener(host: "127.0.0.1")
+    let socket = try DatagramSocket(host: "127.0.0.1", port: server.port)
+    defer { socket.close() }
+    try socket.send(Data([0]))
+    let address = try await server.receive().address
+    let reader = Task {
+        var iterator = socketEvents(socket).makeAsyncIterator()
+        return try await iterator.next()
+    }
+    let deadline = Task {
+        do { try await Task.sleep(for: .seconds(2)); socket.close() } catch {}
+    }
+    defer { deadline.cancel(); reader.cancel() }
+    try server.send(Data(count: 4097), to: address)
+    try server.send(Data([9]), to: address)
+    #expect(try await reader.value == [Data([9])])
+    #expect(socket.discardedDatagrams == 1)
+}

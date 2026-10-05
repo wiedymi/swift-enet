@@ -1,0 +1,154 @@
+[
+  {
+    "revision": "173a6a9",
+    "optimization": "release",
+    "sourceSHA256": {
+      "Client.swift": "e57ac55987eaede52ef74b6d88b2a4f9a6f4004bad3e983cabb02daba0a8b6ca",
+      "ClientError.swift": "a86dc2963545d290945b814be71c4b842081dc8d1a5305e53a2505eca72291d0",
+      "DatagramSocket.swift": "e35ad97a898db4e5ffd033807ac9160d06ba3010b006fa5f552d2a977f04224d",
+      "Metrics.swift": "566dff3967a608af92ab59e0a121b78bf8a1c9c56160d8230333b54e146ecbb5",
+      "Packet.swift": "f192a31d28bd4ed937210dfb6fed8d012b5e234e589960f82807bacefe239f7a",
+      "Peer.swift": "f43fc0fbaf5d452cfb0f7f134a2dd6437baed6abfaf27a8b05ac59585eaa8df0",
+      "SocketExecutor.swift": "3086737d76aedaae9151bd42ad6baf51de7b8298254124e3375cc2607fd336ab",
+      "Wire.swift": "e8c3c31f71cf9a1d6e4c2f81353477eca352add5e1a9ec65f7534c51e87c70a8"
+    },
+    "machine": "Apple M5 Max",
+    "compiler": "swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.2.0",
+    "results": [
+      {
+        "queuedCommands": 1,
+        "checksum": 5100000,
+        "medianMicroseconds": 0.041271
+      },
+      {
+        "queuedCommands": 64,
+        "medianMicroseconds": 1.26525,
+        "checksum": 5100000
+      },
+      {
+        "checksum": 5100000,
+        "medianMicroseconds": 9.6201875,
+        "queuedCommands": 512
+      },
+      {
+        "medianMicroseconds": 74.3145625,
+        "checksum": 5100000,
+        "queuedCommands": 4096
+      }
+    ]
+  },
+  {
+    "revision": "working-tree",
+    "optimization": "release",
+    "sourceSHA256": {
+      "Client.swift": "78a3f47fefb8ddedb0522a2c84c5eb20653357f6182c0127e3429ed6c31dc1d7",
+      "ClientError.swift": "a86dc2963545d290945b814be71c4b842081dc8d1a5305e53a2505eca72291d0",
+      "DatagramSocket.swift": "fb1c7d42c693e4681fd3a70fd3d0c7debbfc01b8b0a2873438bbf486a9df540e",
+      "Metrics.swift": "f915a56da5dc747b29c11aaacee6332c1f8160d3d98938e211dbce69b1a9f572",
+      "Packet.swift": "f192a31d28bd4ed937210dfb6fed8d012b5e234e589960f82807bacefe239f7a",
+      "Peer.swift": "cd0d990b654e9292b0bd481253a1d48f99995fcb95687caa627a89f9966eed38",
+      "SocketExecutor.swift": "3086737d76aedaae9151bd42ad6baf51de7b8298254124e3375cc2607fd336ab",
+      "Wire.swift": "e8c3c31f71cf9a1d6e4c2f81353477eca352add5e1a9ec65f7534c51e87c70a8"
+    },
+    "machine": "Apple M5 Max",
+    "compiler": "swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.2.0",
+    "results": [
+      {
+        "checksum": 5100000,
+        "medianMicroseconds": 0.0219375,
+        "queuedCommands": 1
+      },
+      {
+        "medianMicroseconds": 0.478104,
+        "queuedCommands": 64,
+        "checksum": 5100000
+      },
+      {
+        "queuedCommands": 512,
+        "medianMicroseconds": 5.1138955,
+        "checksum": 5100000
+      },
+      {
+        "medianMicroseconds": 44.4966455,
+        "checksum": 5100000,
+        "queuedCommands": 4096
+      }
+    ]
+  },
+  {
+    "revision": "173a6a9",
+    "optimization": "debug",
+    "sourceSHA256": {
+      "Client.swift": "e57ac55987eaede52ef74b6d88b2a4f9a6f4004bad3e983cabb02daba0a8b6ca",
+      "ClientError.swift": "a86dc2963545d290945b814be71c4b842081dc8d1a5305e53a2505eca72291d0",
+      "DatagramSocket.swift": "e35ad97a898db4e5ffd033807ac9160d06ba3010b006fa5f552d2a977f04224d",
+      "Metrics.swift": "566dff3967a608af92ab59e0a121b78bf8a1c9c56160d8230333b54e146ecbb5",
+      "Packet.swift": "f192a31d28bd4ed937210dfb6fed8d012b5e234e589960f82807bacefe239f7a",
+      "Peer.swift": "f43fc0fbaf5d452cfb0f7f134a2dd6437baed6abfaf27a8b05ac59585eaa8df0",
+      "SocketExecutor.swift": "3086737d76aedaae9151bd42ad6baf51de7b8298254124e3375cc2607fd336ab",
+      "Wire.swift": "e8c3c31f71cf9a1d6e4c2f81353477eca352add5e1a9ec65f7534c51e87c70a8"
+    },
+    "machine": "Apple M5 Max",
+    "compiler": "swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.2.0",
+    "results": [
+      {
+        "checksum": 5100000,
+        "medianMicroseconds": 1.044479,
+        "queuedCommands": 1
+      },
+      {
+        "medianMicroseconds": 16.507375,
+        "checksum": 5100000,
+        "queuedCommands": 64
+      },
+      {
+        "medianMicroseconds": 153.3170625,
+        "checksum": 5100000,
+        "queuedCommands": 512
+      },
+      {
+        "medianMicroseconds": 1234.494083,
+        "queuedCommands": 4096,
+        "checksum": 5100000
+      }
+    ]
+  },
+  {
+    "revision": "working-tree",
+    "optimization": "debug",
+    "sourceSHA256": {
+      "Client.swift": "78a3f47fefb8ddedb0522a2c84c5eb20653357f6182c0127e3429ed6c31dc1d7",
+      "ClientError.swift": "a86dc2963545d290945b814be71c4b842081dc8d1a5305e53a2505eca72291d0",
+      "DatagramSocket.swift": "fb1c7d42c693e4681fd3a70fd3d0c7debbfc01b8b0a2873438bbf486a9df540e",
+      "Metrics.swift": "f915a56da5dc747b29c11aaacee6332c1f8160d3d98938e211dbce69b1a9f572",
+      "Packet.swift": "f192a31d28bd4ed937210dfb6fed8d012b5e234e589960f82807bacefe239f7a",
+      "Peer.swift": "cd0d990b654e9292b0bd481253a1d48f99995fcb95687caa627a89f9966eed38",
+      "SocketExecutor.swift": "3086737d76aedaae9151bd42ad6baf51de7b8298254124e3375cc2607fd336ab",
+      "Wire.swift": "e8c3c31f71cf9a1d6e4c2f81353477eca352add5e1a9ec65f7534c51e87c70a8"
+    },
+    "machine": "Apple M5 Max",
+    "compiler": "swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.2.0",
+    "results": [
+      {
+        "medianMicroseconds": 0.9493334999999999,
+        "queuedCommands": 1,
+        "checksum": 5100000
+      },
+      {
+        "queuedCommands": 64,
+        "medianMicroseconds": 9.055729,
+        "checksum": 5100000
+      },
+      {
+        "checksum": 5100000,
+        "medianMicroseconds": 79.66375,
+        "queuedCommands": 512
+      },
+      {
+        "medianMicroseconds": 664.1794375,
+        "checksum": 5100000,
+        "queuedCommands": 4096
+      }
+    ]
+  }
+]

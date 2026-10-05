@@ -11,11 +11,11 @@ import Testing
     #expect(try Datagram.decode(storage[2..<(2 + bytes.count)]) == datagram)
 }
 
-private func readyPeer(now: UInt64 = 0, channels: Int = 48) -> Peer {
+private func readyPeer(now: UInt64 = 0, channels: Int = 48, window: UInt32 = 65_536) -> Peer {
     var peer = Peer(connectID: 0x11223344, connectData: 0xAABBCCDD, channels: channels, now: now)
     _ = peer.service(now: now)
     let verify = Command(sequence: 1, body: .verify(.init(peerID: 7, incomingSession: 1, outgoingSession: 2,
-                                                           channels: UInt32(channels), connectID: 0x11223344)))
+                                                           window: window, channels: UInt32(channels), connectID: 0x11223344)))
     let output = peer.receive(Datagram(peerID: 0, sessionID: 1, sentTime: UInt16(truncatingIfNeeded: now), commands: [verify]).encoded(), now: now)
     #expect(peer.state == .connected)
     #expect(output.datagrams.count == 1)
@@ -353,4 +353,65 @@ private extension Data {
     #expect(buffered.receive(inbound([ahead]), now: 1).datagrams.count == 1)
     #expect(buffered.receive(inbound([.init(channel: 0, sequence: 1, body: .fragment(first))]), now: 2).datagrams.isEmpty)
     #expect(buffered.receive(inbound([.init(channel: 0, sequence: 1, body: .reliable(Data([1])))]), now: 3).packets.map(\.data) == [Data([1]), Data([2])])
+}
+
+@Test func blockedChannelDoesNotScheduleEmptyTimerWork() throws {
+    var peer = readyPeer(channels: 2, window: 4096)
+    for _ in 0..<4 { try peer.enqueue(Data(count: 872), channel: 0, delivery: .reliable) }
+    try peer.enqueue(Data(count: 576), channel: 0, delivery: .reliable)
+    _ = peer.service(now: 10)
+    try peer.enqueue(Data(count: 64), channel: 0, delivery: .reliable)
+    try peer.enqueue(Data(count: 16), channel: 0, delivery: .unreliable)
+    #expect(peer.nextServiceTime == 510)
+    for now in UInt64(11)..<510 {
+        #expect(peer.service(now: now).datagrams.isEmpty)
+        #expect(peer.nextServiceTime == 510)
+    }
+    // An ACK permits both queued messages without waiting for a timer.
+    _ = peer.receive(inbound([.init(channel: 0, body: .acknowledge(sequence: 1, time: 10))]), now: 20)
+    #expect(peer.nextServiceTime == 0)
+    let commands = try peer.service(now: 20).datagrams.flatMap { try Datagram.decode($0).commands }
+    #expect(commands.contains { $0.channel == 0 && !$0.requestsAcknowledgement })
+}
+
+@Test func bestEffortCanSendWithFullReliableWindowOnOtherChannel() throws {
+    var peer = readyPeer(channels: 2, window: 4096)
+    for _ in 0..<4 { try peer.enqueue(Data(count: 872), channel: 0, delivery: .reliable) }
+    try peer.enqueue(Data(count: 608), channel: 0, delivery: .reliable)
+    _ = peer.service(now: 10)
+    try peer.enqueue(Data(count: 128), channel: 1, delivery: .unreliable)
+    #expect(peer.nextServiceTime == 0)
+    #expect(!peer.service(now: 11).datagrams.isEmpty)
+    #expect(peer.nextServiceTime != 0)
+}
+
+@Test func unacknowledgedPingDoesNotSchedulePastIdleDeadline() {
+    var peer = readyPeer()
+    #expect(!peer.service(now: 500).datagrams.isEmpty)
+    #expect(!peer.service(now: 1004).datagrams.isEmpty)
+    #expect(peer.service(now: 1504).datagrams.isEmpty)
+    #expect(peer.nextServiceTime == 2012)
+}
+
+@Test func sendByteCountersFollowQueueSendAndAcknowledgement() throws {
+    var peer = readyPeer(channels: 2)
+    #expect(peer.metrics.queuedSendBytes == 0)
+    #expect(peer.metrics.inFlightSendBytes == 0)
+    for index in 1...200 {
+        try peer.enqueue(Data(count: 100), channel: 0, delivery: .reliable)
+        try peer.enqueue(Data(count: 50), channel: 1, delivery: .unreliable)
+        #expect(peer.metrics.queuedSendBytes == 106 + 58)
+        _ = peer.service(now: UInt64(index * 10))
+        #expect(peer.metrics.queuedSendBytes == 106)
+        #expect(peer.metrics.inFlightSendBytes == 100)
+        _ = peer.receive(inbound([.init(channel: 0, body: .acknowledge(sequence: UInt16(index), time: UInt16(index * 10)))]), now: UInt64(index * 10 + 1))
+        #expect(peer.metrics.queuedSendBytes == 0)
+        #expect(peer.metrics.inFlightSendBytes == 0)
+    }
+}
+
+@Test func metricsDecodeOlderSnapshots() throws {
+    let metrics = try JSONDecoder().decode(Metrics.self, from: Data("{\"isConnected\":true}".utf8))
+    #expect(metrics.queuedSendBytes == nil)
+    #expect(metrics.discardedSocketDatagrams == nil)
 }

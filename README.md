@@ -106,7 +106,20 @@ Performance results for the earlier embedded implementation are retained in
 [swift-moonlight](https://github.com/wiedymi/swift-moonlight). They are not a
 measurement of this extracted package or of full streaming CPU and energy use.
 
+Version 0.2.1 fixes blocked-channel and pending-ping timer work. Queue metrics
+include queued bytes, in-flight bytes, and raw socket discards. New fields are
+optional when decoding older saved metrics. Run `python3 scripts/benchmark-queue.py`
+for a repeatable service/deadline check; pass `--revision` to compare older code.
+This small check does not measure video decode or Wi-Fi performance.
+
 ## License
 
 MIT. The protocol implementation was written independently. No upstream ENet C
 source is included. See [LICENSE](LICENSE).
+
+Queue check on Apple M5 Max, Swift 6: service plus deadline with 512 waiting
+commands fell from 9.62 to 5.11 microseconds in Release, and from 153.32 to
+79.66 microseconds in Debug. At 4,096 commands it fell from 74.32 to 44.50
+microseconds in Release. These are five-sample medians with fixed virtual time,
+500-byte payloads, and 2,000 calls per sample. They do not include socket or
+application work. See [raw measurements](docs/benchmarks/queue-performance.json).

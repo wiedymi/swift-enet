@@ -17,6 +17,7 @@ final class DatagramSocket: Sendable {
     private struct Buffers: Sendable {
         var handler: (@Sendable (Event) -> Void)?
         var pending: [Data] = []
+        var discarded: UInt64 = 0
         var receive = [UInt8](repeating: 0, count: 4097)
     }
     private let buffers = OSAllocatedUnfairLock(initialState: Buffers())
@@ -116,6 +117,8 @@ final class DatagramSocket: Sendable {
         if let handler { queue.async { handler(.closed) } }
     }
 
+    var discardedDatagrams: UInt64 { buffers.withLock { $0.discarded } }
+
     func takePackets() -> [Data] {
         buffers.withLock {
             let packets = $0.pending
@@ -140,6 +143,8 @@ final class DatagramSocket: Sendable {
                     if count > 0 && count <= 4096 && value.pending.count < 256 {
                         value.pending.append(value.receive.withUnsafeBytes { Data(bytes: $0.baseAddress!, count: count) })
                         if wasEmpty { event = .ready }
+                    } else if value.discarded < UInt64.max {
+                        value.discarded += 1
                     }
                     continue
                 }

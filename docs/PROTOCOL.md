@@ -109,3 +109,18 @@ race or automatic family switch after a handshake timeout. The fixed remote
 endpoint also preserves the previous client's sender-address restriction.
 
 The public client rejects invalid channel IDs and returns channel IDs with received packets. Reliable sequence ranges have one owner; conflicting normal packets and fragments are not ACKed.
+
+## Timer and queue accounting
+
+A blocked unsent reliable command also blocks later unsent traffic on that
+channel. Another channel and the management channel can still progress. Both
+packet service and the next deadline use this rule. Unreliable traffic on an
+unblocked channel does not consume the reliable byte window. A pending ping
+uses its retry deadline instead of an expired idle deadline.
+
+Encoded commands retain immutable header fields to avoid parsing their own
+bytes during each service call. The queue owner maintains queued bytes and
+in-flight reliable payload bytes on enqueue, send, removal, and close. These
+bounded totals are exposed in metrics. The socket counts datagrams discarded
+because they are empty, too large, or exceed its existing 256-entry limit.
+This counter cannot detect packets lost before the socket read.

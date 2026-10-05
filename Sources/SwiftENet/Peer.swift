@@ -14,25 +14,35 @@ struct Peer {
         var packets: [Packet] = []
     }
     private struct Outgoing {
-        // Retain one immutable encoding, including encrypted payload bytes.
-        // Retry metadata is the only additional saved state.
-        var bytes: Data
+        // Retain one encoding, including encrypted payload bytes. Cache its
+        // immutable header fields to avoid repeated reads while servicing.
+        let bytes: Data
         var firstSent: UInt64?
         var lastSent: UInt64?
         var attempts = 0
         var retryDelay: UInt64 = 0
-        init(command: Command) { bytes = command.encoded() }
-        var channel: UInt8 { bytes[1] }
-        var sequence: UInt16 { UInt16(bytes[2]) << 8 | UInt16(bytes[3]) }
-        var number: UInt8 { bytes[0] & 15 }
-        var requestsAcknowledgement: Bool { bytes[0] & 128 != 0 }
-        var cost: Int {
-            switch number {
-            case 6: max(1, bytes.count - 6)
-            case 7, 9: max(1, bytes.count - 8)
-            case 8, 12: max(1, bytes.count - 24)
-            default: 1
+        let channel: UInt8
+        let sequence: UInt16
+        let number: UInt8
+        let requestsAcknowledgement: Bool
+        let cost: Int
+        init(command: Command) {
+            bytes = command.encoded()
+            channel = command.channel
+            sequence = command.sequence
+            number = bytes[0] & 15
+            requestsAcknowledgement = command.requestsAcknowledgement
+            cost = max(1, command.body.payloadSize)
+        }
+        func canSend(flight: Int, limit: Int, blocked: inout SIMD4<UInt64>) -> Bool {
+            guard lastSent == nil, channel != 255 else { return true }
+            let word = Int(channel) / 64
+            let bit = UInt64(1) << (channel % 64)
+            if blocked[word] & bit != 0 || (requestsAcknowledgement && cost > limit - flight) {
+                blocked[word] |= bit
+                return false
             }
+            return true
         }
     }
     private struct Message {
@@ -95,6 +105,8 @@ struct Peer {
     private var channels: [Channel]
     private var managementSequence: UInt16 = 1
     private var outgoing: [Outgoing] = []
+    private var queuedBytes = 0
+    private var inFlightBytes = 0
     private var acknowledgements: [Command] = []
     private var lastSend: UInt64
     private var lastCommunication: UInt64
@@ -126,25 +138,22 @@ struct Peer {
         started = now; lastSend = now; lastCommunication = now; lossEpoch = now; throttleEpoch = now; bandwidthEpoch = now
         let parameters = ConnectParameters(channels: UInt32(channels), connectID: connectID)
         let command = Command(sequence: 1, body: .connect(parameters, data: connectData))
-        outgoing = [.init(command: command)]
+        append(command)
     }
 
     var metrics: Metrics {
         guard state == .connected else { return .init(isConnected: false) }
         return .init(isConnected: true, roundTripTimeMs: roundTripTime, roundTripTimeVarianceMs: roundTripVariance,
-                     packetLossRatio: loss, packetLossVarianceRatio: lossVariance)
+                     packetLossRatio: loss, packetLossVarianceRatio: lossVariance,
+                     queuedSendBytes: queuedBytes, inFlightSendBytes: inFlightBytes)
     }
 
-    private var queuedBytes: Int { outgoing.reduce(0) { $0 + $1.bytes.count } }
     private var retainedBytes: Int { channels.reduce(0) { $0 + $1.retainedBytes } }
     private var retainedEntries: Int {
         channels.reduce(0) { sum, channel in
             sum + channel.reliable.count + channel.unreliable.values.reduce(0) { $0 + $1.count } +
             channel.assemblies.values.reduce(0) { $0 + $1.count }
         }
-    }
-    private var inFlightBytes: Int {
-        outgoing.reduce(0) { $0 + ($1.lastSent != nil && $1.requestsAcknowledgement ? $1.cost : 0) }
     }
 
     mutating func enqueue(_ data: Data, channel: UInt8, delivery: Delivery) throws {
@@ -185,7 +194,9 @@ struct Peer {
     }
 
     private mutating func append(_ command: Command) {
-        outgoing.append(.init(command: command))
+        let item = Outgoing(command: command)
+        outgoing.append(item)
+        queuedBytes += item.bytes.count
     }
 
     mutating func receive(_ data: Data, now: UInt64, flushACKs: Bool = true) -> Output {
@@ -217,7 +228,7 @@ struct Peer {
                     window = max(4096, min(65_536, Int(parameters.window)))
                     channels = Array(channels.prefix(min(channelCount, Int(parameters.channels))))
                     incomingBandwidth = parameters.incomingBandwidth
-                    outgoing.removeAll { $0.channel == 255 && $0.sequence == 1 }
+                    if let index = outgoing.firstIndex(where: { $0.channel == 255 && $0.sequence == 1 }) { removeOutgoing(at: index) }
                     state = .connected
                 }
                 accepted = state == .connected && parameters.connectID == connectID
@@ -294,7 +305,13 @@ struct Peer {
             baselineRTT = lowestRTT; baselineVariance = max(1, highestVariance)
             lowestRTT = roundTripTime; highestVariance = roundTripVariance; throttleEpoch = now
         }
-        outgoing.remove(at: index)
+        removeOutgoing(at: index)
+    }
+
+    private mutating func removeOutgoing(at index: Int) {
+        let item = outgoing.remove(at: index)
+        queuedBytes -= item.bytes.count
+        if item.lastSent != nil && item.requestsAcknowledgement { inFlightBytes -= item.cost }
     }
 
     private func sequenceDistance(_ sequence: UInt16, from base: UInt16) -> UInt16 { sequence &- base }
@@ -474,7 +491,8 @@ struct Peer {
         var retainedCount = 0
         var flight = inFlightBytes
         let flightLimit = max(mtu, window * throttle / 32)
-        var blockedChannels: Set<UInt8> = []
+        // Four words represent all 256 channel IDs without heap allocation.
+        var blockedChannels = SIMD4<UInt64>(repeating: 0)
         func makeDatagram(_ commands: [Data], peer: UInt16, session: UInt8) -> Data {
             var bytes = Datagram(peerID: peer, sessionID: session, sentTime: UInt16(truncatingIfNeeded: now), commands: []).encoded()
             for command in commands { bytes.append(command) }
@@ -492,12 +510,13 @@ struct Peer {
             if let first = item.firstSent, now - first >= Self.timeout { fail(.timedOut); return Output() }
             if let sent = item.lastSent, now - sent < item.retryDelay { retain(item); continue }
             if item.lastSent == nil && item.channel != 255 {
-                if blockedChannels.contains(item.channel) || (isReliable && flight + item.cost > flightLimit) {
-                    blockedChannels.insert(item.channel); retain(item); continue
+                if !item.canSend(flight: flight, limit: flightLimit, blocked: &blockedChannels) {
+                    retain(item); continue
                 }
                 if !isReliable {
                     throttleCounter = (throttleCounter + 7) % 32
                     if throttleCounter > throttle || (incomingBandwidth > 0 && bandwidthBytes + UInt64(item.bytes.count) > UInt64(incomingBandwidth)) {
+                        queuedBytes -= item.bytes.count
                         continue // Best-effort traffic may be dropped under congestion.
                     }
                 }
@@ -516,7 +535,9 @@ struct Peer {
             let base = min(2000, roundTripTime + min(roundTripTime, 4 * max(1, roundTripVariance)))
             item.retryDelay = UInt64(max(1, base) * item.attempts)
             if isReliable { retain(item, changed: true) }
+            else { queuedBytes -= item.bytes.count }
         }
+        inFlightBytes = flight
         outgoing.removeLast(outgoing.count - retainedCount)
         if !commands.isEmpty { output.datagrams.append(makeDatagram(commands, peer: remotePeerID, session: outgoingSession)) }
         return output
@@ -538,14 +559,24 @@ struct Peer {
 
     var nextServiceTime: UInt64? {
         guard state == .connecting || state == .connected else { return nil }
-        var deadline = max(lastCommunication, lastSend) + 500
+        var deadline = lastCommunication + Self.timeout
+        var hasPing = false
         if state == .connecting { deadline = min(deadline, started + Self.timeout) }
-        let availableFlight = max(mtu, window * throttle / 32) - inFlightBytes
+        let flightLimit = max(mtu, window * throttle / 32)
+        // Four words represent all 256 channel IDs without heap allocation.
+        var blockedChannels = SIMD4<UInt64>(repeating: 0)
         for command in outgoing {
-            if let sent = command.lastSent { deadline = min(deadline, sent + command.retryDelay) }
-            else if command.channel == 255 || command.cost <= availableFlight { return 0 }
+            if command.channel == 255 && command.number == 5 { hasPing = true }
+            if let sent = command.lastSent {
+                deadline = min(deadline, sent + command.retryDelay)
+                if let first = command.firstSent { deadline = min(deadline, first + Self.timeout) }
+            } else if command.canSend(flight: inFlightBytes, limit: flightLimit, blocked: &blockedChannels) { return 0 }
         }
-        return min(deadline, lastCommunication + Self.timeout)
+        for channel in channels where !channel.assemblies.isEmpty {
+            for assembly in channel.assemblies.values { deadline = min(deadline, assembly.started + Self.timeout) }
+        }
+        if state == .connected && !hasPing { deadline = min(deadline, max(lastCommunication, lastSend) + 500) }
+        return deadline
     }
 
     mutating func close(now: UInt64) -> Output {
@@ -559,6 +590,7 @@ struct Peer {
 
     private mutating func fail(_ error: ClientError?) {
         state = .closed(error)
-        outgoing.removeAll(); acknowledgements.removeAll(); channels.removeAll()
+        outgoing.removeAll(); queuedBytes = 0; inFlightBytes = 0
+        acknowledgements.removeAll(); channels.removeAll()
     }
 }

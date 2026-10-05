@@ -115,7 +115,11 @@ public actor Client {
         packetWaiter?.continuation.resume(throwing: CancellationError()); packetWaiter = nil
     }
 
-    public func snapshotMetrics() -> Metrics { peer.metrics }
+    public func snapshotMetrics() -> Metrics {
+        var metrics = peer.metrics
+        metrics.discardedSocketDatagrams = socket.discardedDatagrams
+        return metrics
+    }
 
     private func receive(_ packets: [Data]) {
         do {
